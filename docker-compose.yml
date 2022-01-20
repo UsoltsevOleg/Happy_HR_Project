@@ -1,0 +1,25 @@
+version: '3.1'
+services:
+  app:
+    container_name: happy-hr-app
+    image: 'happy.hr:latest'
+    volumes:
+      - ./log:/logs
+    build: ./
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgresqldb
+    environment:
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgresqldb:5432/happy_hr
+      - SPRING_DATASOURCE_USERNAME=postgres
+      - SPRING_DATASOURCE_PASSWORD=31415p
+  postgresqldb:
+    image: 'postgres:alpine'
+    volumes:
+      - /var/lib/postgresql
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_PASSWORD=31415p
+      - POSTGRES_DB=happy_hr

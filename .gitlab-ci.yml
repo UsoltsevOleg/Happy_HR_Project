@@ -1,0 +1,88 @@
+stages:
+    - check variables
+    - build docker image
+    - push docker image 
+    - build helm
+    - push helm
+    - deploy helm into openshift
+ 
+variables:
+    HELM_REPO: helm-group5-back
+
+check variables:
+    before_script:
+        - export PROJECT_VERSION=$(grep 'version =' ./build.gradle | cut -d "'" -f 2 | cut -d "-" -f 1)
+        - export PROJECT_GROUP=$(echo ${CI_PROJECT_PATH} | cut -f 1 -d/)
+    script:
+        - echo "project version is ${PROJECT_VERSION}"
+        - echo "project group is ${PROJECT_GROUP}"
+        - echo "project name is ${CI_PROJECT_NAME}"
+    stage: check variables
+    
+build docker image:
+    before_script:
+        - export PROJECT_VERSION=$(grep 'version =' ./build.gradle | cut -d "'" -f 2 | cut -d "-" -f 1)
+        - export PROJECT_GROUP=$(echo ${CI_PROJECT_PATH} | cut -f 1 -d/)
+    script:
+        - echo project name is ${CI_PROJECT_NAME}
+        - docker build -t ${DOCKER_REPO}/${PROJECT_GROUP}-${CI_PROJECT_NAME}:${PROJECT_VERSION} .    
+    stage: build docker image
+
+push docker image:
+    before_script:
+        - export PROJECT_VERSION=$(grep 'version =' ./build.gradle | cut -d "'" -f 2 | cut -d "-" -f 1)
+        - export PROJECT_GROUP=$(echo ${CI_PROJECT_PATH} | cut -f 1 -d/)
+    script:
+        - docker login ${DOCKER_REPO} -u "${NEXUS_USER}" -p "${NEXUS_PASSWORD}"
+        - docker push -a ${DOCKER_REPO}/${PROJECT_GROUP}-${CI_PROJECT_NAME}
+        - docker rmi "${DOCKER_REPO}/${PROJECT_GROUP}-${CI_PROJECT_NAME}:${PROJECT_VERSION}"
+    stage: push docker image
+
+build helm:
+    before_script:
+        - export PROJECT_VERSION=$(grep 'version =' ./build.gradle | cut -d "'" -f 2 | cut -d "-" -f 1)
+        - export PROJECT_GROUP=$(echo ${CI_PROJECT_PATH} | cut -f 1 -d/)
+        - export EXPOSE_PORT=$(grep EXPOSE Dockerfile | cut -f2 -d' ')
+    script:
+        - helm create ${PROJECT_GROUP}-${CI_PROJECT_NAME}
+        - echo "EXPOSE_PORT is ${EXPOSE_PORT}"
+        - echo "project version is ${PROJECT_VERSION}"
+        - sed -i "s/EXPOSE_PORT/${EXPOSE_PORT}/g" env/values.yaml
+        - sed -i "s/CI_PROJECT_NAME/${PROJECT_GROUP}-${CI_PROJECT_NAME}/g" env/values.yaml
+        - sed -i "s/CI_PROJECT_NAME/${PROJECT_GROUP}-${CI_PROJECT_NAME}/g" env/service.yaml
+        - sed -i "s/CI_PROJECT_NAME/${PROJECT_GROUP}-${CI_PROJECT_NAME}/g" env/deployment.yaml
+        - sed -i "s/0.1.0/\"${PROJECT_VERSION}\"/g" ${PROJECT_GROUP}-${CI_PROJECT_NAME}/Chart.yaml
+        - sed -i "s/0.1.0/${PROJECT_VERSION}/g" env/values.yaml
+        - cp env/values.yaml ${PROJECT_GROUP}-${CI_PROJECT_NAME}/values.yaml
+        - cp env/service.yaml ${PROJECT_GROUP}-${CI_PROJECT_NAME}/templates/service.yaml
+        - cp env/deployment.yaml ${PROJECT_GROUP}-${CI_PROJECT_NAME}/templates/deployment.yaml
+        - helm repo add ${HELM_REPO} ${HELM_REPO_URL}
+        - helm lint ${PROJECT_GROUP}-${CI_PROJECT_NAME}
+        - helm package ${PROJECT_GROUP}-${CI_PROJECT_NAME}
+    artifacts:
+        paths:
+            - "*.tgz"
+        expire_in: 1 day
+    stage: build helm
+
+push helm:
+    before_script:
+        - export PROJECT_VERSION=$(grep 'version =' ./build.gradle | cut -d "'" -f 2 | cut -d "-" -f 1)
+        - export PROJECT_GROUP=$(echo ${CI_PROJECT_PATH} | cut -f 1 -d/)
+        - export EXPOSE_PORT=$(grep EXPOSE Dockerfile | cut -f2 -d' ')
+    script:
+        - helm nexus-push ${HELM_REPO} ${PROJECT_GROUP}-${CI_PROJECT_NAME}-${PROJECT_VERSION}.tgz -u ${NEXUS_USER} -p ${NEXUS_PASSWORD}
+    stage: push helm
+    dependencies: [build helm]
+
+deploy helm into openshift:
+    before_script:
+        - export PROJECT_VERSION=$(grep 'version =' ./build.gradle | cut -d "'" -f 2 | cut -d "-" -f 1)
+        - export PROJECT_GROUP=$(echo ${CI_PROJECT_PATH} | cut -f 1 -d/)
+    script:
+        - helm repo add ${HELM_REPO} ${HELM_REPO_URL}
+        - helm nexus-push ${HELM_REPO} login --username $"NEXUS_USER" --password $"NEXUS_PASSWORD"
+        - helm repo update
+        - helm uninstall ${PROJECT_GROUP}-${CI_PROJECT_NAME} --namespace ${PROJECT_GROUP}
+        - helm --debug upgrade --install ${PROJECT_GROUP}-${CI_PROJECT_NAME} --namespace ${PROJECT_GROUP} ${HELM_REPO}/${PROJECT_GROUP}-${CI_PROJECT_NAME} --wait
+    stage: deploy helm into openshift
